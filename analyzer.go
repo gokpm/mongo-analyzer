@@ -153,7 +153,8 @@ func chunkConvert(i int, records []map[string]any) error {
 }
 
 func chunkCommands(i int, records []map[string]any) error {
-	rows := [][]string{}
+	commands := [][]string{}
+	collscans := [][]string{}
 	for _, record := range records {
 		value, ok := record["msg"]
 		if !ok {
@@ -300,10 +301,13 @@ func chunkCommands(i int, records []map[string]any) error {
 				planSummary,
 				string(commandBytes),
 			}
-			rows = append(rows, row)
+			commands = append(commands, row)
+			if planSummary == "COLLSCAN" {
+				collscans = append(collscans, row)
+			}
 		}
 	}
-	if len(rows) < 1 {
+	if len(commands) < 1 {
 		return nil
 	}
 	var fileName string
@@ -313,23 +317,39 @@ func chunkCommands(i int, records []map[string]any) error {
 	} else {
 		fileName = *outputDir + "/" + outputPrefix + "_commands" + "_" + fmt.Sprint(counter) + ".csv"
 	}
+	err := saveCommands(commands, fileName)
+	if err != nil {
+		return err
+	}
+	if len(collscans) < 1 {
+		return nil
+	}
+	fileName = *outputDir + "/" + outputPrefix + "_collscans.csv"
+	err = saveCommands(collscans, fileName)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func saveCommands(commands [][]string, fileName string) error {
+	header := []string{
+		"Hash",
+		"Duration (Minutes)",
+		"Time (IST)",
+		"Application",
+		"Origin",
+		"Database",
+		"Collection",
+		"Type",
+		"Sort",
+		"Plan",
+		"Command",
+	}
 	_, err := os.Stat(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
-			header := []string{
-				"Hash",
-				"Duration (Minutes)",
-				"Time (IST)",
-				"Application",
-				"Origin",
-				"Database",
-				"Collection",
-				"Type",
-				"Sort",
-				"Plan",
-				"Command",
-			}
-			rows = append([][]string{header}, rows...)
+			commands = append([][]string{header}, commands...)
 			err = nil
 		} else {
 			return err
@@ -341,7 +361,7 @@ func chunkCommands(i int, records []map[string]any) error {
 	}
 	defer file.Close()
 	writer := csv.NewWriter(file)
-	err = writer.WriteAll(rows)
+	err = writer.WriteAll(commands)
 	if err != nil {
 		return err
 	}
