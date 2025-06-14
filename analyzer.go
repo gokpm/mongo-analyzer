@@ -21,6 +21,7 @@ var inputFile *string
 var outputDir *string
 var queryProf = map[string]profMeta{}
 var collectionProf = map[string]profMeta{}
+const chunkSize = 100000
 
 func main() {
 	inputFile = flag.String("i", "", "input file path")
@@ -50,9 +51,8 @@ func main() {
 	} else {
 		return
 	}
-	size := 100000
-	for skip := 0; skip < len(lines); skip += size {
-		limit := skip + size
+	for skip := 0; skip < len(lines); skip += chunkSize {
+		limit := skip + chunkSize
 		if limit > len(lines) {
 			limit = len(lines)
 		}
@@ -114,7 +114,7 @@ func chunkConvert(i int, records []map[string]any) error {
 		return nil
 	}
 	var fileName string
-	counter := i / 1000000
+	counter := i / chunkSize
 	if (counter) < 1 {
 		fileName = *outputDir + "/" + outputPrefix + "_logs.csv"
 	} else {
@@ -311,7 +311,7 @@ func chunkCommands(i int, records []map[string]any) error {
 		return nil
 	}
 	var fileName string
-	counter := i / 1000000
+	counter := i / chunkSize
 	if (counter) < 1 {
 		fileName = *outputDir + "/" + outputPrefix + "_commands.csv"
 	} else {
