@@ -19,13 +19,19 @@ import (
 var outputPrefix string
 var inputFile *string
 var outputDir *string
+var chunkSize *int
 var queryProf = map[string]profMeta{}
 var collectionProf = map[string]profMeta{}
-const chunkSize = 100000
+
+var commands = [][]string{}
+var commandsCounter = 0
+var collscans = [][]string{}
+var collscansCounter = 0
 
 func main() {
 	inputFile = flag.String("i", "", "input file path")
 	outputDir = flag.String("o", "", "output folder path")
+	chunkSize = flag.Int("s", 0, "chunk size")
 	flag.Parse()
 	if inputFile == nil || *inputFile == "" {
 		flag.Usage()
@@ -34,6 +40,14 @@ func main() {
 	if outputDir == nil || *outputDir == "" {
 		flag.Usage()
 		log.Fatalln("error: -o flag (output folder) is required")
+	}
+	if chunkSize == nil {
+		flag.Usage()
+		log.Fatalln("error: -s flag (chunk size) is required")
+	}
+	if *chunkSize < 100 {
+		flag.Usage()
+		log.Fatalln("error: chunk size (-s) must be atleast 100")
 	}
 	fileName := filepath.Base(*inputFile)
 	outputPrefix = strings.TrimSuffix(fileName, filepath.Ext(fileName))
@@ -51,13 +65,27 @@ func main() {
 	} else {
 		return
 	}
-	for skip := 0; skip < len(lines); skip += chunkSize {
-		limit := skip + chunkSize
+	for skip := 0; skip < len(lines); skip += *chunkSize {
+		limit := skip + *chunkSize
 		if limit > len(lines) {
 			limit = len(lines)
 		}
 		chunk := lines[skip:limit]
 		err := process(skip, chunk)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
+	if len(commands) > 0 {
+		fileName := *outputDir + "/" + outputPrefix + "_commands" + "_" + fmt.Sprint(commandsCounter) + ".csv"
+		err := saveCommands(commands, fileName)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
+	if len(collscans) > 0 {
+		fileName := *outputDir + "/" + outputPrefix + "_collscans" + "_" + fmt.Sprint(collscansCounter) + ".csv"
+		err := saveCommands(collscans, fileName)
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -81,7 +109,7 @@ func process(i int, chunk [][]byte) error {
 	if err != nil {
 		return err
 	}
-	err = chunkCommands(i, records)
+	err = chunkCommands(records)
 	if err != nil {
 		return err
 	}
@@ -113,13 +141,8 @@ func chunkConvert(i int, records []map[string]any) error {
 	if len(rows) < 1 {
 		return nil
 	}
-	var fileName string
-	counter := i / chunkSize
-	if (counter) < 1 {
-		fileName = *outputDir + "/" + outputPrefix + "_logs.csv"
-	} else {
-		fileName = *outputDir + "/" + outputPrefix + "_logs" + "_" + fmt.Sprint(counter) + ".csv"
-	}
+	counter := i / *chunkSize
+	fileName := *outputDir + "/" + outputPrefix + "_logs" + "_" + fmt.Sprint(counter) + ".csv"
 	_, err := os.Stat(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -152,9 +175,7 @@ func chunkConvert(i int, records []map[string]any) error {
 	return nil
 }
 
-func chunkCommands(i int, records []map[string]any) error {
-	commands := [][]string{}
-	collscans := [][]string{}
+func chunkCommands(records []map[string]any) error {
 	for _, record := range records {
 		value, ok := record["msg"]
 		if !ok {
@@ -301,54 +322,68 @@ func chunkCommands(i int, records []map[string]any) error {
 				planSummary,
 				string(commandBytes),
 			}
-			commands = append(commands, row)
+			err = addCommand(row)
+			if err != nil {
+				return err
+			}
 			if planSummary == "COLLSCAN" {
-				collscans = append(collscans, row)
+				err = addCollscan(row)
+				if err != nil {
+					return err
+				}
 			}
 		}
-	}
-	if len(commands) < 1 {
-		return nil
-	}
-	var fileName string
-	counter := i / chunkSize
-	if (counter) < 1 {
-		fileName = *outputDir + "/" + outputPrefix + "_commands.csv"
-	} else {
-		fileName = *outputDir + "/" + outputPrefix + "_commands" + "_" + fmt.Sprint(counter) + ".csv"
-	}
-	err := saveCommands(commands, fileName)
-	if err != nil {
-		return err
-	}
-	if len(collscans) < 1 {
-		return nil
-	}
-	fileName = *outputDir + "/" + outputPrefix + "_collscans.csv"
-	err = saveCommands(collscans, fileName)
-	if err != nil {
-		return err
 	}
 	return nil
 }
 
-func saveCommands(commands [][]string, fileName string) error {
-	header := []string{
-		"Hash",
-		"Duration (Minutes)",
-		"Time (IST)",
-		"Application",
-		"Origin",
-		"Database",
-		"Collection",
-		"Type",
-		"Sort",
-		"Plan",
-		"Command",
+func addCommand(row []string) error {
+	commands = append(commands, row)
+	if len(commands) < *chunkSize {
+		return nil
 	}
+	fileName := *outputDir + "/" + outputPrefix + "_commands" + "_" + fmt.Sprint(commandsCounter) + ".csv"
+	err := saveCommands(commands, fileName)
+	if err != nil {
+		return err
+	}
+	commands = [][]string{}
+	commandsCounter++
+	return nil
+}
+
+func addCollscan(row []string) error {
+	collscans = append(collscans, row)
+	if len(collscans) < *chunkSize {
+		return nil
+	}
+	fileName := *outputDir + "/" + outputPrefix + "_collscans" + "_" + fmt.Sprint(collscansCounter) + ".csv"
+	err := saveCommands(collscans, fileName)
+	if err != nil {
+		return err
+	}
+	collscans = [][]string{}
+	collscansCounter++
+	return nil
+}
+
+func saveCommands(commands [][]string, fileName string) error {
 	_, err := os.Stat(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
+			header := []string{
+				"Hash",
+				"Duration (Minutes)",
+				"Time (IST)",
+				"Application",
+				"Origin",
+				"Database",
+				"Collection",
+				"Type",
+				"Sort",
+				"Plan",
+				"Command",
+			}
 			commands = append([][]string{header}, commands...)
 			err = nil
 		} else {
